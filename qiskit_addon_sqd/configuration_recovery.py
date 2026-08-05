@@ -22,6 +22,8 @@ from collections.abc import Sequence
 import numpy as np
 from qiskit.utils.deprecation import deprecate_func
 
+from joblib import Parallel, delayed
+
 
 @deprecate_func(
     since="0.12.0",
@@ -63,6 +65,7 @@ def recover_configurations(
     num_elec_a: int,
     num_elec_b: int,
     rand_seed: np.random.Generator | int | None = None,
+    parallel_jobs: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Refine bitstrings based on average orbital occupancy and a target hamming weight.
 
@@ -111,16 +114,20 @@ def recover_configurations(
 
     corrected_dict: defaultdict[str, float] = defaultdict(float)
     occs_array = np.flip(avg_occupancies).flatten()
-    for bitstring, freq in zip(bitstring_matrix, probabilities):
-        bs_corrected = _bipartite_bitstring_correcting(
-            bitstring,
-            occs_array,
-            num_elec_a,
-            num_elec_b,
-            rng=rng,
-        )
-        bs_str = "".join("1" if bit else "0" for bit in bs_corrected)
-        corrected_dict[bs_str] += freq
+    if parallel_jobs > 1:
+        Parallel(n_jobs=parallel_jobs)(delayed()(bitstring, rng) for bitstring in bitstring_matrix)
+    else:
+        for bitstring, freq in zip(bitstring_matrix, probabilities):
+            bs_corrected = _bipartite_bitstring_correcting(
+                bitstring,
+                occs_array,
+                num_elec_a,
+                num_elec_b,
+                rng=rng,
+            )
+            bs_str = "".join("1" if bit else "0" for bit in bs_corrected)
+            corrected_dict[bs_str] += freq
+    
     bs_mat_out = np.array([[bit == "1" for bit in bs] for bs in corrected_dict])
     freqs_out = np.array([f for f in corrected_dict.values()])
     freqs_out = np.abs(freqs_out) / np.sum(np.abs(freqs_out))
