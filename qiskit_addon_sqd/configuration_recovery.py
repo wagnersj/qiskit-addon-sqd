@@ -89,6 +89,7 @@ def recover_configurations(
         num_elec_a: The number of spin-up electrons in the system.
         num_elec_b: The number of spin-down electrons in the system.
         rand_seed: A seed for controlling randomness
+        parallel_jobs: number of parallel jobs to run
 
     Returns:
         A refined bitstring matrix and an updated probability array.
@@ -114,18 +115,30 @@ def recover_configurations(
 
     corrected_dict: defaultdict[str, float] = defaultdict(float)
     occs_array = np.flip(avg_occupancies).flatten()
-    if parallel_jobs > 1:
-        Parallel(n_jobs=parallel_jobs)(delayed()(bitstring, rng) for bitstring in bitstring_matrix)
-    else:
-        for bitstring, freq in zip(bitstring_matrix, probabilities):
-            bs_corrected = _bipartite_bitstring_correcting(
+
+    def _correct_bitstring(bitstring, occs_array, num_elec_a, num_elec_b, rng):
+        bs_corrected = _bipartite_bitstring_correcting(
                 bitstring,
                 occs_array,
                 num_elec_a,
                 num_elec_b,
                 rng=rng,
             )
-            bs_str = "".join("1" if bit else "0" for bit in bs_corrected)
+        bs_str = "".join("1" if bit else "0" for bit in bs_corrected)
+        return bs_str
+
+    # Correct each bitstring, using parallel jobs to speed up if requested
+    if parallel_jobs > 1:
+        rngs_local = [np.random.default_rng(rng.integers(np.iinfo(np.int32).max)) for _ in range(bitstring_matrix.shape[0])]
+        parallel = Parallel(n_jobs=parallel_jobs, return_as="generator")
+        output_generator = parallel(delayed(_correct_bitstring)(bitstring, occs_array, num_elec_a, num_elec_b, rng_local) 
+                                    for bitstring, rng_local in zip(bitstring_matrix, rngs_local))
+        bs_strs_corrected = list(output_generator)
+        for bs_str, freq in zip(bs_strs_corrected, probabilities):
+            corrected_dict[bs_str] += freq
+    else:
+        for bitstring, freq in zip(bitstring_matrix, probabilities):
+            bs_str = _correct_bitstring(bitstring, occs_array, num_elec_a, num_elec_b, rng)
             corrected_dict[bs_str] += freq
     
     bs_mat_out = np.array([[bit == "1" for bit in bs] for bs in corrected_dict])
